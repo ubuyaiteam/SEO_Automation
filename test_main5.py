@@ -2346,7 +2346,7 @@ def download_and_install_update(url):
 def check_for_updates():
     def _check():
         try:
-            req = urllib.request.Request("https://api.github.com/repos/ubuyaiteam/SEO_Automation/releases/latest")
+            req = urllib.request.Request("https://api.github.com/repos/Somuchamp/SEO-Automation/releases/latest")
             # GitHub API requires a User-Agent header
             req.add_header("User-Agent", "SEO-Automation-App")
             response = urllib.request.urlopen(req)
