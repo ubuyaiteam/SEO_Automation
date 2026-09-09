@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UBUY SEO Admin Panel</title>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #F9B11E; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; color: #333; }
+        .card { background: white; padding: 25px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); text-align: center; width: 90%; max-width: 450px; }
+        h1 { font-size: 22px; margin-bottom: 5px; }
+        .user-select { width: 100%; padding: 12px; border-radius: 10px; border: 2px solid #eee; margin: 15px 0; font-size: 16px; outline: none; }
+        .status-box { background: #f9f9f9; padding: 15px; border-radius: 12px; margin: 15px 0; font-size: 13px; border-left: 5px solid #333; text-align: left; line-height: 1.6; }
+        .btn { background: #333; color: white; border: none; padding: 15px; border-radius: 50px; font-size: 17px; font-weight: bold; cursor: pointer; transition: 0.2s; width: 100%; margin-top: 10px; }
+        .btn:active { transform: scale(0.97); }
+        .btn-disable { background: #e53935; }
+        .indicator { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; background: #ccc; }
+        .online { background: #4CAF50; box-shadow: 0 0 8px #4CAF50; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>SEO Master Control</h1>
+        <p style="font-size: 12px; color: #666;">Admin Dashboard (V6.0)</p>
+        
+        <select class="user-select" id="userList">
+            <option value="">-- Scanning for PCs --</option>
+        </select>
+
+        <div class="status-box" id="statusDisplay" style="display:none;">
+            <strong>PC Name:</strong> <span id="pc-name">None</span><br>
+            <strong>Status:</strong> <span id="status-msg" style="color:#4CAF50; font-weight:bold;">--</span><br>
+            <strong>Last Seen:</strong> <span id="status-time">--</span><br>
+            <strong>Working On:</strong> <span id="status-prop">--</span><br>
+            <strong>Power State:</strong> <span id="power-state" style="font-weight:bold;">OFF (Idle)</span>
+        </div>
+
+        <div id="controls" style="display:none; margin-top: 20px;">
+            <div style="font-weight: bold; margin-bottom: 10px;">Master Control Switch</div>
+            <label class="switch">
+                <input type="checkbox" id="powerToggle">
+                <span class="slider round"></span>
+            </label>
+            <div id="toggleLabel" style="margin-top: 10px; font-weight: bold; color: #E50914;">Tool: DISABLED</div>
+        </div>
+    </div>
+
+    <style>
+        /* Modern Toggle Switch CSS */
+        .switch { position: relative; display: inline-block; width: 60px; height: 34px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; }
+        .slider:before { position: absolute; content: ""; height: 26px; width: 26px; left: 4px; bottom: 4px; background-color: white; transition: .4s; }
+        input:checked + .slider { background-color: #4CAF50; }
+        input:focus + .slider { box-shadow: 0 0 1px #4CAF50; }
+        input:checked + .slider:before { transform: translateX(26px); }
+        .slider.round { border-radius: 34px; }
+        .slider.round:before { border-radius: 50%; }
+    </style>
+
+    <script>
+        const firebaseConfig = {
+            databaseURL: "https://sitemap-automation-7a16a-default-rtdb.firebaseio.com/"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let selectedUser = "";
+        let statusListener = null;
+        let powerListener = null;
+
+        // 1. Fetch all users
+        db.ref('users').on('value', (snapshot) => {
+            const users = snapshot.val();
+            const dropdown = document.getElementById('userList');
+            dropdown.innerHTML = '<option value="">-- Select a PC to Control --</option>';
+            if (users) {
+                Object.keys(users).forEach(pcName => {
+                    const opt = document.createElement('option');
+                    opt.value = pcName;
+                    opt.innerText = "💻 " + pcName;
+                    dropdown.appendChild(opt);
+                });
+            }
+        });
+
+        // 2. Handle User Selection
+        document.getElementById('userList').addEventListener('change', (e) => {
+            selectedUser = e.target.value;
+            if (!selectedUser) {
+                document.getElementById('statusDisplay').style.display = 'none';
+                document.getElementById('controls').style.display = 'none';
+                return;
+            }
+
+            document.getElementById('statusDisplay').style.display = 'block';
+            document.getElementById('controls').style.display = 'block';
+            document.getElementById('pc-name').innerText = selectedUser;
+
+            // Cleanup old listeners
+            if (statusListener) db.ref(`users/${selectedUser}/remote_control/status`).off();
+            if (powerListener) db.ref(`users/${selectedUser}/remote_control/power`).off();
+
+            // Listen to status
+            statusListener = db.ref(`users/${selectedUser}/remote_control/status`).on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (data) {
+                    document.getElementById('status-msg').innerText = data.message;
+                    document.getElementById('status-time').innerText = data.last_update;
+                    document.getElementById('status-prop').innerText = data.property || "None";
+                }
+            });
+
+            // Listen to Power State
+            powerListener = db.ref(`users/${selectedUser}/remote_control/power`).on('value', (snapshot) => {
+                const power = snapshot.val();
+                const toggle = document.getElementById('powerToggle');
+                const label = document.getElementById('toggleLabel');
+                const pState = document.getElementById('power-state');
+                
+                toggle.checked = power === true;
+                if (power === true) {
+                    label.innerText = "Tool: ENABLED";
+                    label.style.color = "#4CAF50";
+                    pState.innerText = "ON (Running)";
+                    pState.style.color = "#4CAF50";
+                } else {
+                    label.innerText = "Tool: DISABLED";
+                    label.style.color = "#E50914";
+                    pState.innerText = "OFF (Idle)";
+                    pState.style.color = "#E50914";
+                }
+            });
+        });
+
+        // 3. Toggle Control
+        document.getElementById('powerToggle').addEventListener('change', (e) => {
+            if (selectedUser) {
+                db.ref(`users/${selectedUser}/remote_control/power`).set(e.target.checked);
+            }
+        });
+    </script>
+</body>
+</html>

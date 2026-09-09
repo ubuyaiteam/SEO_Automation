@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Build artifacts
+dist/
+build/
+*.spec
+
+# Installer outputs (upload to GitHub Releases instead)
+Output/
+SEO_Tool_*.exe
+
+# Sensitive data - DO NOT COMMIT
+*.json
+credentials.csv
+
+# Large media (bundle with installer instead)
+*.gif
+*.gif
+
+# Logs
+*.log
+tasklist.txt
