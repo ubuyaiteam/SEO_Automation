@@ -13,7 +13,7 @@ import urllib.error
 import subprocess
 
 # Version Information
-CURRENT_VERSION = "v9.7"
+CURRENT_VERSION = "v9.7.1"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import datetime
@@ -3798,6 +3798,7 @@ google_session_status = tk.Label(
     fg="#b3b3b3",
     bg=CARD_BG,
     font=("Segoe UI", 9, "italic"),
+    anchor="w",
 )
 
 
@@ -3839,7 +3840,7 @@ btn_clear_google = tk.Button(
     fg="white",
     font=("Segoe UI", 8),
     relief="flat",
-    padx=8,
+    padx=4,
     cursor="hand2",
 )
 btn_clear_google.pack(side="right", padx=(5, 0))
@@ -3859,7 +3860,7 @@ btn_login_google = tk.Button(
     fg="white",
     font=("Segoe UI", 8),
     relief="flat",
-    padx=8,
+    padx=4,
     cursor="hand2",
 )
 btn_login_google.pack(side="right")
@@ -3872,7 +3873,7 @@ btn_cookies_google = tk.Button(
     fg="white",
     font=("Segoe UI", 8),
     relief="flat",
-    padx=8,
+    padx=4,
     cursor="hand2",
 )
 btn_cookies_google.pack(side="right", padx=(0, 5))
@@ -3896,6 +3897,7 @@ bing_session_status = tk.Label(
     fg="#b3b3b3",
     bg=CARD_BG,
     font=("Segoe UI", 9, "italic"),
+    anchor="w",
 )
 
 
@@ -3944,7 +3946,7 @@ btn_clear_bing = tk.Button(
     fg="white",
     font=("Segoe UI", 8),
     relief="flat",
-    padx=8,
+    padx=4,
     cursor="hand2",
 )
 btn_clear_bing.pack(side="right", padx=(5, 0))
@@ -3957,7 +3959,7 @@ btn_login_bing = tk.Button(
     fg="white",
     font=("Segoe UI", 8),
     relief="flat",
-    padx=8,
+    padx=4,
     cursor="hand2",
 )
 btn_login_bing.pack(side="right")
@@ -3970,7 +3972,7 @@ btn_cookies_bing = tk.Button(
     fg="white",
     font=("Segoe UI", 8),
     relief="flat",
-    padx=8,
+    padx=4,
     cursor="hand2",
 )
 btn_cookies_bing.pack(side="right", padx=(0, 5))
