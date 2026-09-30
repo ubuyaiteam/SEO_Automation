@@ -13,7 +13,7 @@ import urllib.error
 import subprocess
 
 # Version Information
-CURRENT_VERSION = "v9.7.1"
+CURRENT_VERSION = "v9.7.2"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import datetime
@@ -1954,6 +1954,7 @@ def run_bing_process(
             current_index = 0
             max_retries_per_item = 3
             current_item_retries = 0
+            consecutive_failed_items = 0
 
             while current_index < total:
                 sitemap = sitemaps[current_index]
@@ -1968,6 +1969,10 @@ def run_bing_process(
                         current_index += 1
                         current_item_retries = 0
                         ok = False
+                        
+                        consecutive_failed_items += 1
+                        if consecutive_failed_items >= 3:
+                            break
                         continue
 
                     # 🚨 Handle Bing crash page
@@ -2069,6 +2074,7 @@ def run_bing_process(
                     )
                     current_index += 1
                     current_item_retries = 0  # Reset retry count on success
+                    consecutive_failed_items = 0  # Reset consecutive errors
                     time.sleep(3)  # Small buffer
 
                 except Exception as e:
@@ -2089,6 +2095,24 @@ def run_bing_process(
                     # If it's a critical error not fixed by reload, skip item
                     current_index += 1
                     current_item_retries = 0
+                    
+                    consecutive_failed_items += 1
+                    if consecutive_failed_items >= 3:
+                        break
+
+            if current_index < total:
+                log("🚨 Bing Server seems to be blocking submissions or is down. Aborting remaining.", "error")
+                remaining = sitemaps[current_index:]
+                try:
+                    desktop = os.path.join(os.environ['USERPROFILE'], 'Desktop')
+                    c_name = property_val.replace('https://', '').replace('http://', '').replace('/', '_')
+                    filename = os.path.join(desktop, f"Bing_Unsubmitted_{c_name}.txt")
+                    with open(filename, 'w') as f:
+                        for r in remaining:
+                            f.write(r + '\n')
+                    log(f"📥 Saved {len(remaining)} unsubmitted sitemaps to your Desktop: {filename}", "info")
+                except Exception as save_err:
+                    log(f"⚠️ Could not save report: {save_err}", "error")
 
         else:
             log("ℹ️ Skipping sitemap submission on Bing (disabled by user).", "info")

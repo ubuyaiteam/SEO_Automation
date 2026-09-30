@@ -1,7 +1,7 @@
 [Setup]
 AppId={{8B190204-7C7D-4FBA-BAE3-DDE8F4B8E1B9}
 AppName=Ubuy SEO Automation Tool
-AppVersion=9.7.1
+AppVersion=9.7.2
 AppPublisher=Ubuy AI Team
 AppPublisherURL=https://github.com/ubuyaiteam/SEO_Automation
 AppSupportURL=https://github.com/ubuyaiteam/SEO_Automation
