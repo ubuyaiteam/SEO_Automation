@@ -13,7 +13,7 @@ import urllib.error
 import subprocess
 
 # Version Information
-CURRENT_VERSION = "v9.6"
+CURRENT_VERSION = "v9.7"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import datetime
@@ -3612,8 +3612,26 @@ tk.Label(
 card_tasks = ttk.LabelFrame(left_col, text=" ⚡ Automated Tasks ", padding=10)
 card_tasks.pack(fill="both", expand=True, pady=(0, 5))
 
-tasks_left_frame = tk.Frame(card_tasks, bg=CARD_BG)
-tasks_left_frame.pack(side="left", fill="both", expand=True)
+tasks_left_outer = tk.Frame(card_tasks, bg=CARD_BG)
+tasks_left_outer.pack(side="left", fill="both", expand=True)
+
+tasks_left_canvas = tk.Canvas(tasks_left_outer, bg=CARD_BG, highlightthickness=0)
+tasks_left_scrollbar = ttk.Scrollbar(tasks_left_outer, orient="vertical", command=tasks_left_canvas.yview)
+tasks_left_canvas.configure(yscrollcommand=tasks_left_scrollbar.set)
+
+tasks_left_scrollbar.pack(side="right", fill="y")
+tasks_left_canvas.pack(side="left", fill="both", expand=True)
+
+tasks_left_frame = tk.Frame(tasks_left_canvas, bg=CARD_BG)
+tasks_left_canvas_window = tasks_left_canvas.create_window((0, 0), window=tasks_left_frame, anchor="nw")
+
+def on_left_frame_configure(event):
+    tasks_left_canvas.configure(scrollregion=tasks_left_canvas.bbox("all"))
+tasks_left_frame.bind("<Configure>", on_left_frame_configure)
+
+def on_left_canvas_configure(event):
+    tasks_left_canvas.itemconfig(tasks_left_canvas_window, width=event.width)
+tasks_left_canvas.bind("<Configure>", on_left_canvas_configure)
 
 tasks_right_frame = tk.Frame(card_tasks, bg=CARD_BG)
 tasks_right_frame.pack(side="right", fill="both", expand=True, padx=(10, 0))
