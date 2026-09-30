@@ -13,7 +13,7 @@ import urllib.error
 import subprocess
 
 # Version Information
-CURRENT_VERSION = "v9.7"
+CURRENT_VERSION = "v9.6"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import datetime
@@ -1784,14 +1784,16 @@ def run_bing_process(
                                 total_deleted += selected_count
                             else:
                                 log(
-                                    "⚠️ Could not find confirmation 'Delete' button in dialog, sending ENTER key...",
+                                    "⚠️ Could not find confirmation 'Delete' button in dialog, sending ENTER to active element...",
                                     "warning",
                                 )
                                 from selenium.webdriver.common.keys import Keys
 
-                                webdriver.ActionChains(driver).send_keys(
-                                    Keys.ENTER
-                                ).perform()
+                                try:
+                                    driver.switch_to.active_element.send_keys(Keys.ENTER)
+                                except Exception as e:
+                                    log(f"⚠️ Fallback ENTER failed: {e}", "error")
+                                
                                 log(
                                     f"✅ Executed Enter key fallback to confirm deletion of {selected_count} sitemap(s).",
                                     "success",
