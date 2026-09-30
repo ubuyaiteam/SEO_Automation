@@ -13,7 +13,7 @@ import urllib.error
 import subprocess
 
 # Version Information
-CURRENT_VERSION = "v9.3 beta"
+CURRENT_VERSION = "v9.6"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import datetime
@@ -23,6 +23,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from google.oauth2 import service_account
+import ssl
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from selenium import webdriver
@@ -295,7 +296,7 @@ def setup_driver_with_session(country, service, headless=False, output_folder=No
             except Exception as e:
                 print(f"⚠️ Could not remove {lock}: {e}")
                 
-    chrome_service = Service(ChromeDriverManager().install())
+    chrome_service = Service()
     if sys.platform.startswith("win"):
         chrome_service.creationflags = 0x08000000
 
@@ -306,10 +307,10 @@ def setup_driver_with_session(country, service, headless=False, output_folder=No
         driver = webdriver.Chrome(service=chrome_service, options=options)
         driver.set_page_load_timeout(60)
         _active_drivers.append(driver)
-        return driver
+        return driver, None
     except Exception as e:
         print(f"❌ Failed to launch Chrome for {country}: {e}")
-        return None
+        return None, str(e)
 
 
 def read_credentials(country):
@@ -494,10 +495,10 @@ def open_login_browser(country, service):
 
         print("🔄 Setting up browser for GSC Validation...")
             
-        driver = setup_driver_with_session(country, service, headless=False, output_folder=None)
+        driver, e = setup_driver_with_session(country, service, headless=False, output_folder=None)
         if not driver:
             print(f"❌ Failed to launch Chrome for {country}. Check terminal for errors.")
-            messagebox.showerror("Login Error", f"Failed to launch Chrome for {country}.")
+            messagebox.showerror("Login Error", f"Failed to launch Chrome for {country}: {e}")
             return
 
         driver.get(start_url)
@@ -1849,7 +1850,7 @@ def run_bing_process(
     ok = True
     try:
         log("🌐 Starting Bing automation...", "info")
-        driver = setup_driver_with_session(
+        driver, _ = setup_driver_with_session(
             country, "bing", headless=dev_headless_var.get(), output_folder=output_folder
         )
         sitemaps = latestSitemap
@@ -2331,7 +2332,12 @@ def download_and_install_update(url):
             update_window.update()
             
             installer_path = os.path.join(os.environ["TEMP"], "SEO_Auto_Update.exe")
-            urllib.request.urlretrieve(url, installer_path)
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            with urllib.request.urlopen(url, context=ctx) as response, open(installer_path, 'wb') as out_file:
+                shutil.copyfileobj(response, out_file)
             
             # Execute installer and exit current app
             subprocess.Popen([installer_path, "/SILENT"])
@@ -2346,10 +2352,15 @@ def download_and_install_update(url):
 def check_for_updates():
     def _check():
         try:
-            req = urllib.request.Request("https://api.github.com/repos/Somuchamp/SEO-Automation/releases/latest")
+            req = urllib.request.Request("https://api.github.com/repos/ubuyaiteam/SEO_Automation/releases/latest")
             # GitHub API requires a User-Agent header
             req.add_header("User-Agent", "SEO-Automation-App")
-            response = urllib.request.urlopen(req)
+            
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            response = urllib.request.urlopen(req, context=ctx)
             data = json.loads(response.read().decode())
             latest_version = data.get("tag_name", "")
             
@@ -2571,7 +2582,7 @@ def run_bot(
                     
                     if active_flags["gse"]:
                         gsc_log("📊 Fetching GSE data...")
-                        gsc_driver = setup_driver_with_session(country, "google", headless=dev_headless_var.get(), output_folder=output_folder)
+                        gsc_driver, _ = setup_driver_with_session(country, "google", headless=dev_headless_var.get(), output_folder=output_folder)
                         if gsc_driver:
                             try:
                                 add_progress("gse", 5)
@@ -2612,7 +2623,7 @@ def run_bot(
                     if active_flags["inner_validation"]:
                         def gsc_log(msg, level="info"): log(f"[GOOGLE] {msg}", level)
                         gsc_log("🌍 Setting up browser for GSC Validation...")
-                        gsc_driver = setup_driver_with_session(country, "google", headless=dev_headless_var.get(), output_folder=output_folder)
+                        gsc_driver, _ = setup_driver_with_session(country, "google", headless=dev_headless_var.get(), output_folder=output_folder)
                         if gsc_driver:
                             try:
                                 add_progress("inner_validation", 5)
@@ -2702,7 +2713,7 @@ from tkinter import scrolledtext, ttk
 # MAIN GUI INITIALIZATION
 # ==================================================
 root = tk.Tk()
-dev_headless_var = tk.BooleanVar(value=False)  # Developer hidden headless mode
+dev_headless_var = tk.BooleanVar(value=True)  # Default to Headless mode
 
 # Start invisible for fade-in
 root.attributes("-alpha", 0.0)
@@ -2718,7 +2729,7 @@ try:
 except Exception as e:
     print("Icon load error:", e)
 
-root.title("UBUY SEO Automation Tool V9.3(beta)")
+root.title(f"UBUY SEO Automation Tool {CURRENT_VERSION.upper()}(beta)")
 
 # Center Window
 window_width, window_height = 950, 850
@@ -2969,15 +2980,7 @@ lbl_main_title = tk.Label(
 )
 lbl_main_title.pack(anchor="w")
 
-def toggle_dev_mode(event):
-    if 'chk_dev_headless' in globals():
-        if chk_dev_headless.winfo_ismapped():
-            chk_dev_headless.pack_forget()
-        else:
-            dev_headless_var.set(True)  # Fix tristate bug
-            chk_dev_headless.pack(side="top", anchor="w", padx=20, pady=5)
 
-lbl_main_title.bind("<Double-1>", toggle_dev_mode)
 
 tk.Label(
     title_group,
@@ -3245,81 +3248,30 @@ countries_list = sorted(
 country_frame = tk.Frame(card_creds, bg=CARD_BG)
 country_frame.pack(fill="x", pady=(0, 5))
 
-USER_ASSIGNMENTS = {
-    "Sachin": [
-        "Romania",
-        "Taiwan",
-        "Kazakhstan",
-        "New Zealand",
-        "Ireland",
-        "Cambodia",
-        "Madagascar",
-        "Dominican Republic",
-        "Equatorial Guinea",
-        "Guernsey",
-        "Djibouti",
-        "Liechtenstein",
-    ],
-    "Surendra": [
-        "Oman",
-        "Denmark",
-        "Norway",
-        "Sri Lanka",
-        "Poland",
-        "Armenia",
-        "Zambia",
-        "Kyrgyzstan",
-        "Libya",
-        "Montserrat",
-        "Saint Kitts and Nevis",
-        "Sierra Leone",
-    ],
-    "Nitesh": [
-        "Angola",
-        "Austria",
-        "Latvia",
-        "Bahrain",
-        "Seychelles",
-        "Ecuador",
-        "Vietnam",
-        "Argentina",
-        "Costa Rica",
-    ],
-    "Soumyadeep": ["Botswana", "Namibia", "Zimbabwe", "Guadeloupe", "Niger", "Lesotho"],
-    "Mohit": [
-        "Timor-Leste",
-        "Peru",
-        "Turkey",
-        "Slovenia",
-        "The Bahamas",
-        "The Gambia",
-        "Turks and Caicos",
-    ],
-    "Custom (Manual)": [],
-}
 
-# User Profile Selection
-tk.Label(country_frame, text="User:", bg=CARD_BG, fg=TEXT_COLOR).pack(side="left")
-user_var = tk.StringVar(value="Select User")
-user_dropdown = ttk.Combobox(
-    country_frame,
-    textvariable=user_var,
-    values=list(USER_ASSIGNMENTS.keys()),
-    state="readonly",
-    font=("Segoe UI", 10),
-    width=15,
-)
-user_dropdown.pack(side="left", padx=(5, 15))
 
 # Multiple Country Listbox
 tk.Label(country_frame, text="Countries:", bg=CARD_BG, fg=TEXT_COLOR).pack(side="left")
 country_listbox_frame = tk.Frame(country_frame, bg=CARD_BG)
 country_listbox_frame.pack(side="left", padx=(5, 10))
 
+search_var = tk.StringVar()
+search_entry = ttk.Entry(country_listbox_frame, textvariable=search_var, width=25)
+search_entry.pack(side="top", fill="x", pady=(0, 2))
+
+def filter_countries(*args):
+    search_term = search_var.get().lower()
+    country_listbox.delete(0, tk.END)
+    for c in countries_list:
+        if search_term in c.lower():
+            country_listbox.insert(tk.END, c)
+            
+search_var.trace_add("write", filter_countries)
+
 country_scrollbar = tk.Scrollbar(country_listbox_frame, orient="vertical")
 country_listbox = tk.Listbox(
     country_listbox_frame,
-    selectmode=tk.MULTIPLE,
+    selectmode=tk.BROWSE,
     yscrollcommand=country_scrollbar.set,
     height=8,
     font=("Segoe UI", 10),
@@ -3335,22 +3287,6 @@ for c in countries_list:
 
 def get_selected_countries():
     return [country_listbox.get(i) for i in country_listbox.curselection()]
-
-
-def on_user_select(event=None):
-    selected_user = user_var.get()
-    if selected_user in USER_ASSIGNMENTS:
-        assigned = USER_ASSIGNMENTS[selected_user]
-        country_listbox.selection_clear(0, tk.END)
-        for i, c in enumerate(countries_list):
-            if c in assigned:
-                country_listbox.selection_set(i)
-                if c == assigned[0]:
-                    country_listbox.see(i)
-        check_country_sa_main()
-
-
-user_dropdown.bind("<<ComboboxSelected>>", on_user_select)
 
 sa_status_label = tk.Label(
     country_frame,
@@ -3479,7 +3415,7 @@ COUNTRY_DOMAINS = {
     "Cote d'Ivoire": "ubuy.ci",
     "Togo": "ubuy.tg",
     "Honduras": "ubuy.hn",
-    "Jamaica": "https://www.ubuy.com.jm/",
+    "Jamaica": "ubuy.com.jm",
     "Micronesia": "ubuy.fm",
     "Mongolia": "ubuy.mn",
     "Turkmenistan": "ubuy.tm",
@@ -3654,34 +3590,7 @@ COUNTRY_DOMAINS = {
 
 
 
-# --- Search Functionality for Dropdown ---
-search_state = {"buffer": "", "last_time": 0}
 
-
-def handle_combobox_search_main(event):
-    if not hasattr(event, "char") or not event.char.isalnum():
-        return
-    
-    # Check if the listbox widget has focus
-    if root.focus_get() != country_listbox:
-        return
-
-    # Extremely simple search-by-character for the listbox
-    search_char = event.char.lower()
-    
-    match_idx = -1
-    for i, country in enumerate(countries_list):
-        if country.lower().startswith(search_char):
-            match_idx = i
-            break
-
-    if match_idx != -1:
-        country_listbox.selection_clear(0, tk.END)
-        country_listbox.selection_set(match_idx)
-        country_listbox.see(match_idx)
-        check_country_sa_main()
-
-root.bind_all("<Key>", handle_combobox_search_main)
 
 
 # Status Frame for DB status
@@ -4172,16 +4081,17 @@ btn_frame.pack(fill="x", pady=(0, 20))
 
 global chk_dev_headless
 chk_dev_headless = tk.Checkbutton(
-    title_group, 
-    text="Headless Mode", 
+    btn_frame, 
+    text="Show Browser Window", 
     variable=dev_headless_var, 
-    onvalue=True,
-    offvalue=False,
+    onvalue=False,
+    offvalue=True,
     bg=BG_COLOR, 
     fg=TEXT_COLOR, 
+    selectcolor=BG_COLOR,
     font=("Segoe UI", 10, "bold")
 )
-# Intentionally not packed (revealed via easter egg)
+chk_dev_headless.pack(side="top", pady=(0, 10))
 
 start_btn = PulsingButton(
     btn_frame,
@@ -4352,6 +4262,6 @@ def type_writer(label, text, index=0):
         label.after(delay, type_writer, label, text, index + 1)
 
 # Start Typewriter
-root.after(500, lambda: type_writer(lbl_main_title, "SEO Automation V9.3(beta)"))
+root.after(500, lambda: type_writer(lbl_main_title, f"SEO Automation {CURRENT_VERSION.upper()}(beta)"))
 
 root.mainloop()
