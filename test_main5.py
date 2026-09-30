@@ -13,7 +13,7 @@ import urllib.error
 import subprocess
 
 # Version Information
-CURRENT_VERSION = "v9.7.2"
+CURRENT_VERSION = "v9.7.3"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import datetime
@@ -2100,9 +2100,10 @@ def run_bing_process(
                     if consecutive_failed_items >= 3:
                         break
 
-            if current_index < total:
+            if current_index < total or consecutive_failed_items > 0:
                 log("🚨 Bing Server seems to be blocking submissions or is down. Aborting remaining.", "error")
-                remaining = sitemaps[current_index:]
+                start_index = max(0, current_index - consecutive_failed_items)
+                remaining = sitemaps[start_index:]
                 try:
                     desktop = os.path.join(os.environ['USERPROFILE'], 'Desktop')
                     c_name = property_val.replace('https://', '').replace('http://', '').replace('/', '_')
