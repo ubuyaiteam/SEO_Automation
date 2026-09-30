@@ -13,7 +13,7 @@ import urllib.error
 import subprocess
 
 # Version Information
-CURRENT_VERSION = "v9.6"
+CURRENT_VERSION = "v9.7"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import datetime
@@ -3799,7 +3799,6 @@ google_session_status = tk.Label(
     bg=CARD_BG,
     font=("Segoe UI", 9, "italic"),
 )
-google_session_status.pack(side="left", padx=(10, 0))
 
 
 def clear_google_session():
@@ -3878,7 +3877,7 @@ btn_cookies_google = tk.Button(
 )
 btn_cookies_google.pack(side="right", padx=(0, 5))
 
-
+google_session_status.pack(side="left", fill="x", expand=True, padx=(10, 5), anchor="w")
 
 # Bing Session Row
 bing_session_frame = tk.Frame(card_sessions, bg=CARD_BG)
@@ -3898,7 +3897,6 @@ bing_session_status = tk.Label(
     bg=CARD_BG,
     font=("Segoe UI", 9, "italic"),
 )
-bing_session_status.pack(side="left", padx=(10, 0))
 
 
 def clear_bing_session():
@@ -3977,7 +3975,7 @@ btn_cookies_bing = tk.Button(
 )
 btn_cookies_bing.pack(side="right", padx=(0, 5))
 
-
+bing_session_status.pack(side="left", fill="x", expand=True, padx=(10, 5), anchor="w")
 
 
 
