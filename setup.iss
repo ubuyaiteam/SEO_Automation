@@ -26,6 +26,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: ".\dist\SEO_Auto\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "ubuy.gif"; DestDir: "{app}"; Flags: ignoreversion
+Source: "service-account.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "service_accounts_data.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "credentials.csv"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Ubuy SEO Automation Tool"; Filename: "{app}\SEO_Auto.exe"; IconFilename: "{app}\icon.ico"

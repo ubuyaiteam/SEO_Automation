@@ -13,7 +13,7 @@ import urllib.error
 import subprocess
 
 # Version Information
-CURRENT_VERSION = "v9.7.3"
+CURRENT_VERSION = "v9.8"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import datetime
@@ -32,7 +32,6 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
 from win10toast import ToastNotifier
 
 from app1 import get_gsc_data
@@ -570,10 +569,10 @@ def setup_driver(output_folder):
         "download.directory_upgrade": True,
         "safebrowsing.enabled": True,
     }
-    options.add_experimental_option("prefs", prefs)
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()), options=options
-    )
+    chrome_service = Service()
+    if sys.platform.startswith("win"):
+        chrome_service.creationflags = 0x08000000
+    driver = webdriver.Chrome(service=chrome_service, options=options)
     driver.set_page_load_timeout(60)
     _active_drivers.append(driver)
     return driver
@@ -610,53 +609,111 @@ def load_cookies_from_text(driver, cookie_text, log):
     return True
 
 
-def extract_urls_from_sitemap(property, log):
-    """Fetch sitemap or sitemap index and return <loc> URLs via a headless Selenium browser to bypass Cloudflare."""
-    sitemap_url = f"https://www.{property}/sitemap.xml"
-    xml_content = None
+def extract_urls_from_sitemap(property, log=print):
+    """
+    Fetch sitemap or sitemap index and return <loc> URLs.
+    First tries fast direct HTTP request with gzip support (no browser, no cmd.exe, no antivirus triggers).
+    Falls back to headless Selenium only if direct HTTP fails (e.g., Cloudflare challenge).
+    """
+    def _do_log(msg, level="info"):
+        if callable(log):
+            try:
+                log(msg, level)
+            except TypeError:
+                log(msg)
+        else:
+            print(msg)
 
-    print(f"Fetching sitemap via headless Selenium: {sitemap_url}")
-    try:
-        options = Options()
-        options.add_argument("--headless=new")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("--blink-settings=imagesEnabled=false")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
-        options.add_argument(
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        )
+    candidate_urls = []
+    cleaned_prop = property.strip().lower().replace("https://", "").replace("http://", "").rstrip("/")
+    if cleaned_prop.startswith("www."):
+        candidate_urls.append(f"https://{cleaned_prop}/sitemap.xml")
+        candidate_urls.append(f"https://{cleaned_prop[4:]}/sitemap.xml")
+    else:
+        candidate_urls.append(f"https://www.{cleaned_prop}/sitemap.xml")
+        candidate_urls.append(f"https://{cleaned_prop}/sitemap.xml")
 
-        service = Service(ChromeDriverManager().install())
-        if sys.platform.startswith("win"):
-            service.creationflags = 0x08000000
+    # Step 1: Fast Direct HTTP Fetch
+    for sitemap_url in candidate_urls:
+        _do_log(f"Fetching sitemap via direct HTTP: {sitemap_url}")
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            req = urllib.request.Request(
+                sitemap_url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+                    "Accept": "application/xml,text/xml,*/*",
+                    "Accept-Encoding": "gzip, deflate",
+                },
+            )
+            with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+                if resp.status == 200:
+                    raw = resp.read()
+                    if resp.headers.get("Content-Encoding") == "gzip" or (len(raw) >= 2 and raw[:2] == b"\x1f\x8b"):
+                        import gzip
+                        raw = gzip.decompress(raw)
+                    xml_content = raw.decode("utf-8", errors="ignore")
+                    urls = re.findall(r"<loc\b[^>]*>(.*?)</loc>", xml_content, re.IGNORECASE | re.DOTALL)
+                    cleaned_urls = [u.strip() for u in urls if u and u.strip()]
+                    if cleaned_urls:
+                        _do_log(f"✅ Fast HTTP: Successfully extracted {len(cleaned_urls)} sitemaps from {sitemap_url}.", "success")
+                        return cleaned_urls
+        except Exception as http_err:
+            _do_log(f"ℹ️ Direct HTTP fetch for {sitemap_url} not available ({http_err}). Trying fallback...", "warn")
 
-        temp_driver = webdriver.Chrome(service=service, options=options)
-        temp_driver.set_page_load_timeout(60)
-        temp_driver.execute_cdp_cmd(
-            "Page.addScriptToEvaluateOnNewDocument",
-            {
-                "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-            },
-        )
-        temp_driver.get(sitemap_url)
-        time.sleep(5)  # Wait for page/sitemap to load
-        xml_content = temp_driver.page_source
-        safe_quit_driver(temp_driver)
-        print("✅ Successfully fetched sitemap.")
-    except Exception as sel_err:
-        if _stop_requested: raise sel_err
-        print(f"❌ Failed to fetch sitemap: {sel_err}")
-        return []
+    # Step 2: Headless Selenium Fallback (Using native Service, NO ChromeDriverManager, NO cmd.exe)
+    for sitemap_url in candidate_urls:
+        _do_log(f"Fetching sitemap via headless Selenium: {sitemap_url}")
+        temp_driver = None
+        try:
+            options = Options()
+            options.add_argument("--headless=new")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--window-size=1920,1080")
+            options.add_argument("--blink-settings=imagesEnabled=false")
+            options.add_argument("--disable-blink-features=AutomationControlled")
+            options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            options.add_experimental_option("useAutomationExtension", False)
+            options.add_argument(
+                "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36"
+            )
 
-    if xml_content:
-        urls = re.findall(r"<loc>(.*?)</loc>", xml_content)
-        print(f"Found {len(urls)} URLs in sitemap.")
-        return urls
+            service = Service()
+            if sys.platform.startswith("win"):
+                service.creationflags = 0x08000000
+
+            temp_driver = webdriver.Chrome(service=service, options=options)
+            temp_driver.set_page_load_timeout(60)
+            temp_driver.execute_cdp_cmd(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {
+                    "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+                },
+            )
+            temp_driver.get(sitemap_url)
+            time.sleep(5)  # Wait for page/sitemap to load
+            xml_content = temp_driver.page_source
+            safe_quit_driver(temp_driver)
+            temp_driver = None
+
+            if xml_content:
+                urls = re.findall(r"<loc\b[^>]*>(.*?)</loc>", xml_content, re.IGNORECASE | re.DOTALL)
+                cleaned_urls = [u.strip() for u in urls if u and u.strip()]
+                if cleaned_urls:
+                    _do_log(f"✅ Headless Browser: Found {len(cleaned_urls)} URLs in sitemap ({sitemap_url}).", "success")
+                    return cleaned_urls
+        except Exception as sel_err:
+            if temp_driver:
+                try: safe_quit_driver(temp_driver)
+                except: pass
+            if _stop_requested: raise sel_err
+            _do_log(f"❌ Failed to fetch sitemap via Selenium ({sitemap_url}): {sel_err}", "error")
+
+    _do_log(f"❌ Could not extract any sitemaps for {property}.", "error")
     return []
 
 
@@ -1121,7 +1178,21 @@ def submit_all_sitemaps(
     try:
         # Build a normalized set of the newly submitted URLs for fast lookup
         sitemap_list_to_use = full_sitemap_list if full_sitemap_list is not None else sitemaps
-        new_sitemap_set = set(s.strip().rstrip("/") for s in sitemap_list_to_use)
+
+        def _clean_sitemap_url(u):
+            if not u: return ""
+            u = u.strip().lower()
+            u = re.sub(r"^https?://", "", u)
+            u = re.sub(r"^www\.", "", u)
+            return u.rstrip("/")
+
+        new_sitemap_set = {_clean_sitemap_url(s) for s in sitemap_list_to_use if s and s.strip()}
+
+        # 🛑 CRITICAL SAFETY LOCK: Never delete all sitemaps if 0 sitemaps were extracted!
+        if delete_stale and not new_sitemap_set:
+            log("🛑 [SAFETY LOCK ACTIVATED] 0 valid sitemaps were found from domain!", "error")
+            log("🛑 Stale sitemap deletion has been ABORTED to protect existing GSC sitemaps from accidental deletion.", "error")
+            return ok
 
         # List all sitemaps currently registered in GSC
         response = service.sitemaps().list(siteUrl=site_url).execute()
@@ -1135,6 +1206,8 @@ def submit_all_sitemaps(
                 registered_url = sitemap_entry.get("path", "").strip().rstrip("/")
                 if not registered_url:
                     continue
+
+                registered_norm = _clean_sitemap_url(registered_url)
 
                 # Check if sitemap has errors (like Couldn't fetch)
                 errors_count = int(sitemap_entry.get("errors", 0))
@@ -1158,7 +1231,7 @@ def submit_all_sitemaps(
                     except Exception as de:
                         if _stop_requested: raise de
                         log(f"⚠️ Could not remove {registered_url}: {de}", "warn")
-                elif delete_stale and registered_url not in new_sitemap_set:
+                elif delete_stale and registered_norm not in new_sitemap_set:
                     try:
                         service.sitemaps().delete(
                             siteUrl=site_url, feedpath=registered_url
@@ -1354,7 +1427,13 @@ def run_bing_process(
                 return None
 
             sitemap_list_to_use = full_sitemap_list if full_sitemap_list is not None else latestSitemap
-            new_sitemaps_normalized = {normalize_url(u) for u in sitemap_list_to_use}
+            new_sitemaps_normalized = {normalize_url(u) for u in sitemap_list_to_use if u and u.strip()}
+
+            # 🛑 CRITICAL SAFETY LOCK: Never delete all Bing sitemaps if 0 sitemaps were extracted!
+            if not new_sitemaps_normalized:
+                log("🛑 [SAFETY LOCK ACTIVATED] 0 valid sitemaps were found from domain!", "error")
+                log("🛑 Bing stale sitemap deletion has been ABORTED to protect existing Bing sitemaps from accidental deletion.", "error")
+                return
 
             # 2. Try to expand to maximum rows per page (500)
             try:
@@ -2100,10 +2179,9 @@ def run_bing_process(
                     if consecutive_failed_items >= 3:
                         break
 
-            if current_index < total or consecutive_failed_items > 0:
+            if current_index < total:
                 log("🚨 Bing Server seems to be blocking submissions or is down. Aborting remaining.", "error")
-                start_index = max(0, current_index - consecutive_failed_items)
-                remaining = sitemaps[start_index:]
+                remaining = sitemaps[current_index:]
                 try:
                     desktop = os.path.join(os.environ['USERPROFILE'], 'Desktop')
                     c_name = property_val.replace('https://', '').replace('http://', '').replace('/', '_')
@@ -2367,12 +2445,25 @@ def download_and_install_update(url):
                 shutil.copyfileobj(response, out_file)
             
             # Execute installer and exit current app
-            subprocess.Popen([installer_path, "/SILENT"])
-            os._exit(0)
+            try:
+                subprocess.Popen([installer_path])
+                os._exit(0)
+            except Exception as run_err:
+                import webbrowser
+                if messagebox.askyesno(
+                    "Launch Blocked",
+                    f"Update was downloaded but could not be launched directly ({run_err}).\n\nWould you like to open the downloaded file folder?"
+                ):
+                    os.system(f'explorer /select,"{installer_path}"')
         except Exception as e:
-            messagebox.showerror("Update Error", f"Failed to download or install update: {e}")
             if 'update_window' in locals():
                 update_window.destroy()
+            import webbrowser
+            if messagebox.askyesno(
+                "Update Download Restricted",
+                f"Failed to download update ({e}).\n\nSecurity software (like Sophos) may be blocking direct GitHub binary downloads.\n\nWould you like to open the GitHub Release page in your browser to download manually?"
+            ):
+                webbrowser.open("https://github.com/ubuyaiteam/SEO_Automation/releases/latest")
                 
     threading.Thread(target=_download, daemon=True).start()
 
@@ -2613,7 +2704,7 @@ def run_bot(
                         if gsc_driver:
                             try:
                                 add_progress("gse", 5)
-                                result = get_gsc_data(property_val, gsc_driver, output_folder)
+                                result = get_gsc_data(property_val, gsc_driver, output_folder, log=gsc_log)
                                 root.after(0, update_stats_safe, result)
                                 add_progress("gse", 95)
                             finally:
@@ -2756,7 +2847,7 @@ try:
 except Exception as e:
     print("Icon load error:", e)
 
-root.title(f"UBUY SEO Automation Tool {CURRENT_VERSION.upper()}(beta)")
+root.title(f"UBUY SEO Automation Tool {CURRENT_VERSION.upper()}")
 
 # Center Window
 window_width, window_height = 950, 850

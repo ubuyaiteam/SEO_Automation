@@ -38,6 +38,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; The main executable from the 'dist' folder (one-file build)
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "service-account.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "service_accounts_data.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "credentials.csv"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

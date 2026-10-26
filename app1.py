@@ -11,12 +11,12 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.action_chains import ActionChains
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 from datetime import datetime
 import sys
 import os
+import shutil
 
 def resource_path(filename):
     if hasattr(sys, '_MEIPASS'):
@@ -25,30 +25,44 @@ def resource_path(filename):
 
 def get_service_account_path():
     appdata = os.getenv('APPDATA')
-    if not appdata:
-        return resource_path("service-account.json")
-    
-    app_folder = os.path.join(appdata, "UbuySEOAutomation")
-    if not os.path.exists(app_folder):
-        os.makedirs(app_folder, exist_ok=True)
-        
+    app_folder = os.path.join(appdata, "UbuySEOAutomation") if appdata else os.path.abspath(".")
+    os.makedirs(app_folder, exist_ok=True)
     appdata_path = os.path.join(app_folder, "service-account.json")
     
-    # If the file does not exist in AppData, copy it from the bundled resource
-    if not os.path.exists(appdata_path):
-        import shutil
-        bundled_path = resource_path("service-account.json")
-        if os.path.exists(bundled_path) and bundled_path != appdata_path:
-            try:
-                shutil.copy(bundled_path, appdata_path)
-                print(f"Copied service-account.json from bundled resources to {appdata_path}")
-            except Exception as e:
-                print(f"Failed to copy service-account.json: {e}")
-                
-    # Fallback to current directory or bundled resource if still not found
-    if not os.path.exists(appdata_path):
-        return resource_path("service-account.json")
+    # 1. If it exists in AppData, use it
+    if os.path.exists(appdata_path):
+        return appdata_path
         
+    # 2. Try copying from PyInstaller's bundled resource folder
+    bundled_path = resource_path("service-account.json")
+    if os.path.exists(bundled_path) and bundled_path != appdata_path:
+        try:
+            shutil.copy(bundled_path, appdata_path)
+            print(f"Copied service-account.json from bundled resources to {appdata_path}")
+            return appdata_path
+        except Exception as e:
+            print(f"Failed to copy service-account.json: {e}")
+            return bundled_path
+            
+    # 3. Try directory of running exe / installation folder
+    exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+    exe_path = os.path.join(exe_dir, "service-account.json")
+    if os.path.exists(exe_path) and exe_path != appdata_path:
+        try:
+            shutil.copy(exe_path, appdata_path)
+            return appdata_path
+        except Exception:
+            return exe_path
+
+    # 4. Try current working directory
+    local_path = os.path.abspath("service-account.json")
+    if os.path.exists(local_path) and local_path != appdata_path:
+        try:
+            shutil.copy(local_path, appdata_path)
+            return appdata_path
+        except Exception:
+            return local_path
+            
     return appdata_path
 
 def normalize_number_string(s: str) -> int:
@@ -346,7 +360,7 @@ def get_crawl_stats(domain: str, driver, output_dir) -> Dict[str, int]:
 
 
 def update_sheet_with_results(
-    service_account_json: str,
+    service_account_json: Union[str, dict],
     spreadsheet_id: str,
     target_gid: Optional[int],
     domain: str,
@@ -356,22 +370,20 @@ def update_sheet_with_results(
     today_avg_ms: int,
     seven_total: int,
     seven_avg_ms: int,
+    log=print,
 ) -> None:
     """
     Update Google Sheet with GSC data results.
-    
-    Args:
-        service_account_json: Path to Google service account JSON file
-        spreadsheet_id: Google Sheets spreadsheet ID
-        target_gid: Optional sheet tab ID (gid)
-        domain: Domain to update
-        indexed: Number of indexed URLs
-        non_indexed: Number of non-indexed URLs
-        today_total: Today's total crawl requests
-        today_avg_ms: Today's average response time (ms)
-        seven_total: 7 days ago total crawl requests
-        seven_avg_ms: 7 days ago average response time (ms)
     """
+    def _log(msg, level="info"):
+        if callable(log):
+            try:
+                log(msg, level)
+            except TypeError:
+                log(msg)
+        else:
+            print(msg)
+
     try:
         from google.oauth2.service_account import Credentials
         from googleapiclient.discovery import build
@@ -379,7 +391,13 @@ def update_sheet_with_results(
         raise ImportError("Google API libraries not installed. Install with: pip install google-api-python-client google-auth")
     
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_file(service_account_json, scopes=scopes)
+    if isinstance(service_account_json, dict):
+        creds = Credentials.from_service_account_info(service_account_json, scopes=scopes)
+    elif isinstance(service_account_json, str) and os.path.exists(service_account_json):
+        creds = Credentials.from_service_account_file(service_account_json, scopes=scopes)
+    else:
+        raise FileNotFoundError(f"Service account file not found: {service_account_json}")
+        
     service = build("sheets", "v4", credentials=creds)
     
     # Resolve sheet title by gid (sheetId) if provided
@@ -628,57 +646,42 @@ def update_sheet_with_results(
             body=body,
         ).execute()
         updated_cells = result.get('updatedCells', 0)
-        print(f"✅ Sheet updated successfully for domain: {domain}")
-        print(f"   Updated {updated_cells} cells in range: {write_range}")
+        _log(f"✅ Google Sheet updated successfully for {domain} (Updated {updated_cells} cells in {sheet_title})!", "success")
     except Exception as e:
-        print(f"❌ Error updating sheet: {e}")
+        _log(f"❌ Error updating Google Sheet for {domain}: {e}", "error")
         raise
 
 
 def get_gsc_data(
     domain: str, 
-    driver,output_dir
+    driver,
+    output_dir,
+    log=print,
 ) -> Dict[str, int]:
     """
-    Main function to fetch Google Search Console data.
-    
-    Args:
-        domain: Domain property (e.g., "example.com")
-        cookies_path: Path to cookies.json file
-        headless: Run browser in headless mode (default: True)
-        update_sheet: Whether to update Google Sheet (default: False)
-        service_account_json: Path to Google service account JSON file (required if update_sheet=True)
-        spreadsheet_id: Google Sheets spreadsheet ID (required if update_sheet=True)
-        sheet_gid: Optional sheet tab ID (gid), defaults to first sheet
-    
-    Returns:
-        Dictionary containing:
-        - indexed: Number of indexed URLs
-        - non_indexed: Number of non-indexed URLs
-        - today_total_requests: Total crawl requests today
-        - today_avg_response_ms: Average response time today (ms)
-        - seven_days_total_requests: Total crawl requests 7 days ago
-        - seven_days_avg_response_ms: Average response time 7 days ago (ms)
-    
-    Raises:
-        FileNotFoundError: If cookies_path doesn't exist
-        Exception: For other errors during execution
+    Main function to fetch Google Search Console data and update the Google Sheet.
     """
-    
+    def _log(msg, level="info"):
+        if callable(log):
+            try: log(msg, level)
+            except TypeError: log(msg)
+        else:
+            print(msg)
+
     try:
         index_data = get_index_counts(domain, driver)
     except TimeoutException:
-        print("❌ Could not find the metrics on the page. Check login or cookies.")
+        _log("❌ Could not find the metrics on the page. Check login or session.", "error")
         index_data = {"indexed": 0, "non_indexed": 0}
     except Exception as e:
-        print(f"❌ Error fetching index counts: {e}")
+        _log(f"❌ Error fetching index counts: {e}", "error")
         index_data = {"indexed": 0, "non_indexed": 0}
         
-        # Get crawl stats
+    # Get crawl stats
     try:
         crawl_data = get_crawl_stats(domain, driver, output_dir)
     except Exception as e:
-        print(f"❌ Error fetching crawl stats: {e}")
+        _log(f"❌ Error fetching crawl stats: {e}", "error")
         crawl_data = {
             "today_total_requests": 0,
             "today_avg_response_ms": 0,
@@ -686,7 +689,7 @@ def get_gsc_data(
             "seven_days_avg_response_ms": 0,
         }
         
-        # Combine results
+    # Combine results
     results = {
         "indexed": index_data.get("indexed", 0),
         "non_indexed": index_data.get("non_indexed", 0),
@@ -695,28 +698,27 @@ def get_gsc_data(
         "seven_days_total_requests": crawl_data.get("seven_days_total_requests", 0),
         "seven_days_avg_response_ms": crawl_data.get("seven_days_avg_response_ms", 0),
     }
-    service_account_json = get_service_account_path()
 
+    service_account_source = get_service_account_path()
     spreadsheet_id = "1fnfgAWfkMzpY4bXWvWdrS0hq5OmoQd_9Ks99y7XrFbo"
     sheet_gid = 0
-    if os.path.exists(service_account_json):
-            try:
-                update_sheet_with_results(
-                    service_account_json=service_account_json,
-                    spreadsheet_id=spreadsheet_id,
-                    target_gid=sheet_gid,
-                    domain=domain,
-                    indexed=results["indexed"],
-                    non_indexed=results["non_indexed"],
-                    today_total=results["today_total_requests"],
-                    today_avg_ms=results["today_avg_response_ms"],
-                    seven_total=results["seven_days_total_requests"],
-                    seven_avg_ms=results["seven_days_avg_response_ms"],
-                )
-            except Exception as e:
-                    print(f"⚠️  Failed to update sheet: {e}")
-    else:
-            print(f"⚠️  Service account file not found: {service_account_json}")
+    _log(f"📊 Syncing data for {domain} to Google Sheets...", "info")
+    try:
+        update_sheet_with_results(
+            service_account_json=service_account_source,
+            spreadsheet_id=spreadsheet_id,
+            target_gid=sheet_gid,
+            domain=domain,
+            indexed=results["indexed"],
+            non_indexed=results["non_indexed"],
+            today_total=results["today_total_requests"],
+            today_avg_ms=results["today_avg_response_ms"],
+            seven_total=results["seven_days_total_requests"],
+            seven_avg_ms=results["seven_days_avg_response_ms"],
+            log=log,
+        )
+    except Exception as e:
+        _log(f"⚠️ Failed to update Google Sheet for {domain}: {e}", "error")
         
     return results
     
