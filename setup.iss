@@ -1,7 +1,7 @@
 [Setup]
 AppId={{8B190204-7C7D-4FBA-BAE3-DDE8F4B8E1B9}
 AppName=Ubuy SEO Automation Tool
-AppVersion=9.8
+AppVersion=9.9
 AppPublisher=Ubuy AI Team
 AppPublisherURL=https://github.com/ubuyaiteam/SEO_Automation
 AppSupportURL=https://github.com/ubuyaiteam/SEO_Automation
@@ -27,6 +27,7 @@ Source: ".\dist\SEO_Auto\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdi
 Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "ubuy.gif"; DestDir: "{app}"; Flags: ignoreversion
 Source: "service-account.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "service-account.json"; DestDir: "{userappdata}\UbuySEOAutomation"; Flags: ignoreversion
 Source: "service_accounts_data.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "credentials.csv"; DestDir: "{app}"; Flags: ignoreversion
 

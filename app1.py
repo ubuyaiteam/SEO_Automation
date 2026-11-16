@@ -29,41 +29,39 @@ def get_service_account_path():
     os.makedirs(app_folder, exist_ok=True)
     appdata_path = os.path.join(app_folder, "service-account.json")
     
-    # 1. If it exists in AppData, use it
+    # 1. Look for available source key (PyInstaller bundled, exe folder, or current working dir)
+    exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        resource_path("service-account.json"),
+        os.path.join(exe_dir, "service-account.json"),
+        os.path.abspath("service-account.json")
+    ]
+    
+    source_path = None
+    for cand in candidates:
+        if os.path.exists(cand) and os.path.abspath(cand) != os.path.abspath(appdata_path):
+            source_path = cand
+            break
+
+    # 2. If a source file is found, sync/replace it into AppData if missing or outdated
+    if source_path:
+        try:
+            needs_update = True
+            if os.path.exists(appdata_path):
+                with open(source_path, 'rb') as f_src, open(appdata_path, 'rb') as f_dst:
+                    if f_src.read() == f_dst.read():
+                        needs_update = False
+            if needs_update:
+                shutil.copy2(source_path, appdata_path)
+                print(f"Updated service-account.json in AppData from {source_path}")
+        except Exception as e:
+            print(f"Failed to sync service-account.json to AppData: {e}")
+            return source_path
+
     if os.path.exists(appdata_path):
         return appdata_path
-        
-    # 2. Try copying from PyInstaller's bundled resource folder
-    bundled_path = resource_path("service-account.json")
-    if os.path.exists(bundled_path) and bundled_path != appdata_path:
-        try:
-            shutil.copy(bundled_path, appdata_path)
-            print(f"Copied service-account.json from bundled resources to {appdata_path}")
-            return appdata_path
-        except Exception as e:
-            print(f"Failed to copy service-account.json: {e}")
-            return bundled_path
             
-    # 3. Try directory of running exe / installation folder
-    exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-    exe_path = os.path.join(exe_dir, "service-account.json")
-    if os.path.exists(exe_path) and exe_path != appdata_path:
-        try:
-            shutil.copy(exe_path, appdata_path)
-            return appdata_path
-        except Exception:
-            return exe_path
-
-    # 4. Try current working directory
-    local_path = os.path.abspath("service-account.json")
-    if os.path.exists(local_path) and local_path != appdata_path:
-        try:
-            shutil.copy(local_path, appdata_path)
-            return appdata_path
-        except Exception:
-            return local_path
-            
-    return appdata_path
+    return source_path if source_path else appdata_path
 
 def normalize_number_string(s: str) -> int:
     s = s.strip()

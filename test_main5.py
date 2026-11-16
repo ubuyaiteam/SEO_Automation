@@ -13,7 +13,7 @@ import urllib.error
 import subprocess
 
 # Version Information
-CURRENT_VERSION = "v9.8"
+CURRENT_VERSION = "v9.9"
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import datetime
@@ -34,7 +34,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from win10toast import ToastNotifier
 
-from app1 import get_gsc_data
+from app1 import get_gsc_data, get_service_account_path
 
 # Local JSON Storage (AppData Migration)
 
@@ -51,6 +51,10 @@ def get_app_folder():
     return app_folder
 
 APP_FOLDER = get_app_folder()
+try:
+    get_service_account_path()
+except Exception as _e:
+    print(f"Service account auto-sync on startup: {_e}")
 
 def get_data_path():
     """Get the absolute path to the data file in AppData and ensure directory exists."""
