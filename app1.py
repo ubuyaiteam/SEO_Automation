@@ -669,7 +669,15 @@ def get_gsc_data(
     try:
         index_data = get_index_counts(domain, driver)
     except TimeoutException:
-        _log("❌ Could not find the metrics on the page. Check login or session.", "error")
+        curr_url = ""
+        try:
+            curr_url = driver.current_url.lower()
+        except Exception:
+            pass
+        if "accounts.google.com" in curr_url or "signin" in curr_url or "about" in curr_url:
+            _log("❌ Google session is expired or signed out (Redirected to Google Sign-in). Please click [Cookies] to paste fresh cookies.", "error")
+        else:
+            _log(f"❌ Could not find metrics on GSC page. Ensure account has access to sc-domain:{domain}", "error")
         index_data = {"indexed": 0, "non_indexed": 0}
     except Exception as e:
         _log(f"❌ Error fetching index counts: {e}", "error")

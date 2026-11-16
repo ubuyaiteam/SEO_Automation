@@ -146,31 +146,102 @@ def show_notification(title, message):
 # ==================================================
 # SESSION MANAGEMENT
 # ==================================================
-def get_session_dir(country, service):
-    """Get persistent Chrome profile directory for a country/service combo.
-    service = 'google' or 'bing'
+def get_cookie_file(country, service):
+    """Find the cookie JSON file for a country/service combo, with global fallback."""
+    country_clean = country.strip().lower() if country else ""
+    service_clean = service.strip().lower() if service else ""
+    
+    # 1. Country-specific cookie file
+    if country_clean:
+        specific = os.path.join(APP_FOLDER, f"cookies_{country_clean}_{service_clean}.json")
+        if os.path.exists(specific) and os.path.getsize(specific) > 2:
+            return specific
+        legacy_temp = os.path.join(APP_FOLDER, f"temp_cookies_{country_clean}_{service_clean}.json")
+        if os.path.exists(legacy_temp) and os.path.getsize(legacy_temp) > 2:
+            return legacy_temp
+
+    # 2. Global service cookie fallback
+    global_file = os.path.join(APP_FOLDER, f"cookies_{service_clean}_global.json")
+    if os.path.exists(global_file) and os.path.getsize(global_file) > 2:
+        return global_file
+
+    # 3. Project root cookies.json fallback
+    root_file = os.path.abspath("cookies.json")
+    if service_clean == "google" and os.path.exists(root_file) and os.path.getsize(root_file) > 2:
+        return root_file
+
+    return os.path.join(APP_FOLDER, f"cookies_{country_clean}_{service_clean}.json")
+
+
+def get_cookie_status(country, service):
     """
+    Inspects cookie JSON and returns (status_code, display_text, hex_color).
+    status_code: 'active', 'expired', 'none'
+    """
+    cookie_file = get_cookie_file(country, service)
+    if not os.path.exists(cookie_file) or os.path.getsize(cookie_file) <= 2:
+        return "none", "🔴 No Cookies", "#E50914"
+
+    try:
+        with open(cookie_file, "r", encoding="utf-8") as f:
+            cookies = json.load(f)
+        if not isinstance(cookies, list) or len(cookies) == 0:
+            return "none", "🔴 Invalid Cookies", "#E50914"
+
+        is_global = "_global" in cookie_file or cookie_file.endswith("cookies.json")
+        prefix = "Global " if is_global else ""
+
+        now = time.time()
+        expirations = []
+        for c in cookies:
+            exp = c.get("expirationDate") or c.get("expiry")
+            if exp:
+                try:
+                    expirations.append(float(exp))
+                except:
+                    pass
+
+        if expirations:
+            future_exps = [e for e in expirations if e > now]
+            if not future_exps:
+                max_past = max(expirations)
+                dt_str = datetime.datetime.fromtimestamp(max_past).strftime("%b %d, %Y")
+                return "expired", f"⚠️ {prefix}Expired ({dt_str})", "#FF9800"
+            else:
+                min_future = min(future_exps)
+                dt_str = datetime.datetime.fromtimestamp(min_future).strftime("%b %d, %Y")
+                return "active", f"🟢 {prefix}Active (Exp: {dt_str})", "#4CAF50"
+        else:
+            return "active", f"🟢 {prefix}Active (Session)", "#4CAF50"
+    except Exception:
+        return "none", "🔴 Error Reading", "#E50914"
+
+
+def get_session_dir(country, service):
+    """Get temporary directory base for Chrome."""
     base = os.path.join(APP_FOLDER, "sessions", country, service)
     os.makedirs(base, exist_ok=True)
     return base
 
 
 def session_exists(country, service):
-    """Check if a saved session profile exists for a country/service."""
-    session_dir = get_session_dir(country, service)
-    default_dir = os.path.join(session_dir, "Default")
-    return os.path.isdir(default_dir)
+    """Check if valid cookies exist for a country/service."""
+    status, _, _ = get_cookie_status(country, service)
+    return status == "active"
 
 
 def clear_session(country, service):
-    """Delete a saved session profile."""
-    session_dir = get_session_dir(country, service)
-    if os.path.isdir(session_dir):
-        shutil.rmtree(session_dir, ignore_errors=True)
-        # Check if it was actually deleted
-        default_dir = os.path.join(session_dir, "Default")
-        if os.path.isdir(default_dir):
-            return False
+    """Delete saved cookies for a country/service."""
+    country_clean = country.strip().lower() if country else ""
+    service_clean = service.strip().lower() if service else ""
+    target = os.path.join(APP_FOLDER, f"cookies_{country_clean}_{service_clean}.json")
+    if os.path.exists(target):
+        try: os.remove(target)
+        except: pass
+    temp_target = os.path.join(APP_FOLDER, f"temp_cookies_{country_clean}_{service_clean}.json")
+    if os.path.exists(temp_target):
+        try: os.remove(temp_target)
+        except: pass
     return True
 
 def get_real_profile_info(country):
@@ -279,40 +350,105 @@ def _build_chrome_options(user_data_dir, profile_name, headless, output_folder, 
     return options
 
 
+def load_cookies_to_driver(driver, country, service):
+    """
+    Injects saved cookies into the active driver session.
+    """
+    cookie_file = get_cookie_file(country, service)
+    if not os.path.exists(cookie_file) or os.path.getsize(cookie_file) <= 2:
+        print(f"⚠️ No cookie file found for {service.title()} ({country})")
+        return False
+
+    try:
+        with open(cookie_file, "r", encoding="utf-8") as f:
+            cookies = json.load(f)
+            
+        if not isinstance(cookies, list):
+            print(f"❌ Cookie file for {country} is not a valid list.")
+            return False
+
+        added = 0
+        for cookie in cookies:
+            selenium_cookie = {
+                'name': cookie.get('name'),
+                'value': cookie.get('value'),
+                'path': cookie.get('path', '/')
+            }
+            if cookie.get('domain'):
+                selenium_cookie['domain'] = cookie['domain']
+            if 'secure' in cookie:
+                selenium_cookie['secure'] = cookie.get('secure')
+            if 'expirationDate' in cookie:
+                try:
+                    selenium_cookie['expiry'] = int(cookie['expirationDate'])
+                except:
+                    pass
+            elif 'expiry' in cookie:
+                try:
+                    selenium_cookie['expiry'] = int(cookie['expiry'])
+                except:
+                    pass
+                    
+            try:
+                driver.add_cookie(selenium_cookie)
+                added += 1
+            except Exception:
+                try:
+                    sc_no_domain = dict(selenium_cookie)
+                    sc_no_domain.pop('domain', None)
+                    driver.add_cookie(sc_no_domain)
+                    added += 1
+                except Exception:
+                    pass
+        
+        print(f"🍪 Injected {added} cookies for {service.title()} ({country}) from {os.path.basename(cookie_file)}!")
+        return added > 0
+    except Exception as e:
+        print(f"❌ Failed to load cookies from {cookie_file}: {e}")
+        return False
+
+
 def setup_driver_with_session(country, service, headless=False, output_folder=None):
     """
-    Create a Chrome driver using a persistent session profile.
-    This restores the original sessions located in AppData/Roaming/UbuySEOAutomation/sessions.
-    It also cleans up any zombie lock files from previous crashes to prevent the devtoolsactiveport error.
+    Creates an isolated Chrome driver and automatically injects cookies for the country/service.
+    Uses an ephemeral temporary profile directory to eliminate SingletonLock crashes and profile corruption.
     """
-    session_dir = get_session_dir(country, service)
+    temp_dir = tempfile.mkdtemp(prefix=f"seo_chrome_{service}_{country}_")
     
-    # 🧹 CRITICAL FIX: Aggressively clean up any lingering lock files before launching.
-    # If a previous run crashed, these files get left behind and cause the "devtoolsactiveport" error.
-    locks_to_remove = ["SingletonLock", "SingletonSocket", "SingletonCookie", "DevToolsActivePort"]
-    for lock in locks_to_remove:
-        lock_path = os.path.join(session_dir, lock)
-        if os.path.exists(lock_path):
-            try:
-                os.remove(lock_path)
-                print(f"🧹 Cleaned up stale lock file: {lock}")
-            except Exception as e:
-                print(f"⚠️ Could not remove {lock}: {e}")
-                
     chrome_service = Service()
     if sys.platform.startswith("win"):
         chrome_service.creationflags = 0x08000000
 
-    print(f"🔄 Launching Chrome using persistent session for {country}...")
+    print(f"🔄 Launching clean Chrome session for {country} ({service.title()})...")
     try:
-        # Build options using the dedicated session directory
-        options = _build_chrome_options(session_dir, "Default", headless, output_folder, with_profile=True)
+        options = _build_chrome_options(temp_dir, "Default", headless, output_folder, with_profile=True)
         driver = webdriver.Chrome(service=chrome_service, options=options)
         driver.set_page_load_timeout(60)
+        driver._temp_dir = temp_dir
         _active_drivers.append(driver)
+        
+        # Auto-inject cookies before automation tasks run
+        if service.lower() == "google":
+            print(f"🍪 Auto-injecting Google cookies for {country}...")
+            driver.get("https://search.google.com/search-console")
+            time.sleep(1)
+            load_cookies_to_driver(driver, country, "google")
+            driver.refresh()
+            time.sleep(2)
+        elif service.lower() == "bing":
+            print(f"🍪 Auto-injecting Bing cookies for {country}...")
+            driver.get("https://www.bing.com")
+            time.sleep(1)
+            load_cookies_to_driver(driver, country, "bing")
+            time.sleep(1)
+
         return driver, None
     except Exception as e:
         print(f"❌ Failed to launch Chrome for {country}: {e}")
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except:
+            pass
         return None, str(e)
 
 
@@ -379,74 +515,49 @@ def auto_login_google(driver, credentials):
         return False
 
 
-def load_cookies_to_driver(driver, country, service):
-    country_clean = country.strip().lower()
-    service_clean = service.strip().lower()
-    
-    # 0. Look for temporary cookies from UI paste
-    cookie_file = os.path.join(APP_FOLDER, f"temp_cookies_{country_clean}_{service_clean}.json")
-    
-    if not os.path.exists(cookie_file):
-        # 1. Look for specific: cookies_guadeloupe_google.json
-        cookie_file = os.path.join(APP_FOLDER, f"cookies_{country_clean}_{service_clean}.json")
-        
-        if not os.path.exists(cookie_file):
-            return False
-
-    try:
-        with open(cookie_file, "r", encoding="utf-8") as f:
-            cookies = json.load(f)
-            
-        added = 0
-        for cookie in cookies:
-            selenium_cookie = {
-                'name': cookie.get('name'),
-                'value': cookie.get('value'),
-                'domain': cookie.get('domain'),
-                'path': cookie.get('path', '/')
-            }
-            if 'secure' in cookie:
-                selenium_cookie['secure'] = cookie.get('secure')
-            if 'expirationDate' in cookie:
-                selenium_cookie['expiry'] = int(cookie['expirationDate'])
-                
-            try:
-                driver.add_cookie(selenium_cookie)
-                added += 1
-            except Exception:
-                pass
-        
-        print(f"🍪 Loaded {added} cookies from {cookie_file}!")
-        
-        # Auto-cleanup for temp cookie files
-        if "temp_cookies_" in cookie_file:
-            try:
-                os.remove(cookie_file)
-                print(f"🧹 Cleaned up temporary cookie file: {cookie_file}")
-            except Exception as e:
-                print(f"⚠️ Failed to delete temp cookie file: {e}")
-                
-        return added > 0
-    except Exception as e:
-        print(f"❌ Failed to load cookies from {cookie_file}: {e}")
-        return False
-
-
 def open_cookie_paste_window(country, service):
-    country_clean = country.strip().lower()
-    service_clean = service.strip().lower()
+    country_clean = country.strip().lower() if country else ""
+    service_clean = service.strip().lower() if service else ""
     
     top = tk.Toplevel()
-    top.title(f"Paste Cookies for {service.title()} ({country})")
-    top.geometry("500x400")
+    top.title(f"Manage Cookies - {service.title()} ({country})")
+    top.geometry("560x490")
     top.attributes("-topmost", True)
+    top.minsize(460, 360)
     
-    lbl = tk.Label(top, text="Paste raw JSON cookies from EditThisCookie:")
-    lbl.pack(pady=5)
+    lbl = tk.Label(
+        top, 
+        text=f"Paste raw JSON cookies from EditThisCookie / Cookie-Editor for {service.title()}:",
+        font=("Segoe UI", 9, "bold")
+    )
+    lbl.pack(pady=(10, 4), padx=10, anchor="w")
     
-    text_area = scrolledtext.ScrolledText(top, wrap=tk.WORD, height=15)
+    text_area = scrolledtext.ScrolledText(top, wrap=tk.WORD, height=13, font=("Consolas", 9))
     text_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
     
+    # Pre-populate if existing cookies exist
+    existing_file = get_cookie_file(country, service)
+    if os.path.exists(existing_file) and os.path.getsize(existing_file) > 2:
+        try:
+            with open(existing_file, "r", encoding="utf-8") as f:
+                content = f.read()
+                text_area.insert("1.0", content)
+        except Exception:
+            pass
+
+    # Option: Global cookies checkbox
+    global_var = tk.BooleanVar(value=False)
+    chk_global = tk.Checkbutton(
+        top, 
+        text=f"Save as Global {service.title()} Cookies (Applies to ALL countries if not overridden)",
+        variable=global_var,
+        font=("Segoe UI", 9)
+    )
+    chk_global.pack(anchor="w", padx=10, pady=(2, 4))
+
+    status_lbl = tk.Label(top, text="", font=("Segoe UI", 9, "italic"), fg="#555")
+    status_lbl.pack(padx=10, pady=2, anchor="w")
+
     def save_cookies():
         content = text_area.get("1.0", tk.END).strip()
         if not content:
@@ -456,92 +567,129 @@ def open_cookie_paste_window(country, service):
         try:
             cookies = json.loads(content)
             if not isinstance(cookies, list):
-                raise ValueError("Cookies must be a JSON array.")
+                raise ValueError("Cookies must be a JSON array of cookie objects.")
         except Exception as e:
             messagebox.showerror("Invalid JSON", f"The pasted text is not valid JSON:\n\n{e}")
             return
             
-        cookie_file = os.path.join(APP_FOLDER, f"temp_cookies_{country_clean}_{service_clean}.json")
+        target_file = os.path.join(APP_FOLDER, f"cookies_{country_clean}_{service_clean}.json")
         try:
-            with open(cookie_file, "w", encoding="utf-8") as f:
+            with open(target_file, "w", encoding="utf-8") as f:
                 json.dump(cookies, f, indent=4)
-            messagebox.showinfo("Saved", f"Temporary cookies saved!\nNow click 'Login' to use them.")
+                
+            if global_var.get():
+                global_target = os.path.join(APP_FOLDER, f"cookies_{service_clean}_global.json")
+                with open(global_target, "w", encoding="utf-8") as f:
+                    json.dump(cookies, f, indent=4)
+                    
+            update_session_status()
+            messagebox.showinfo(
+                "Saved", 
+                f"✅ Saved {len(cookies)} cookies for {service.title()} ({country})!\n\n"
+                f"When you click START, these cookies will be automatically injected."
+            )
             top.destroy()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save cookies file:\n{e}")
-            
-    btn_save = tk.Button(top, text="Save Cookies", command=save_cookies, bg="#4CAF50", fg="white", font=("Segoe UI", 10, "bold"))
-    btn_save.pack(pady=10)
 
+    def clear_cookies_action():
+        if messagebox.askyesno("Confirm Delete", f"Delete saved cookies for {service.title()} ({country})?"):
+            target_file = os.path.join(APP_FOLDER, f"cookies_{country_clean}_{service_clean}.json")
+            if os.path.exists(target_file):
+                try: os.remove(target_file)
+                except: pass
+            temp_file = os.path.join(APP_FOLDER, f"temp_cookies_{country_clean}_{service_clean}.json")
+            if os.path.exists(temp_file):
+                try: os.remove(temp_file)
+                except: pass
+            text_area.delete("1.0", tk.END)
+            update_session_status()
+            messagebox.showinfo("Deleted", "Cookies removed.")
+            top.destroy()
+
+    def test_cookies():
+        content = text_area.get("1.0", tk.END).strip()
+        if not content:
+            messagebox.showwarning("Empty", "Please paste cookies before testing.")
+            return
+        try:
+            cookies = json.loads(content)
+            if not isinstance(cookies, list): raise ValueError()
+        except:
+            messagebox.showerror("Invalid JSON", "Pasted content is not valid JSON.")
+            return
+
+        status_lbl.config(text="⏳ Testing cookies in background Chrome...", fg="#1E88E5")
+        top.update()
+
+        def _test_worker():
+            try:
+                chrome_service = Service()
+                if sys.platform.startswith("win"):
+                    chrome_service.creationflags = 0x08000000
+                options = Options()
+                options.add_argument("--headless=new")
+                options.add_argument("--disable-gpu")
+                options.add_argument("--no-sandbox")
+                options.add_argument("--disable-dev-shm-usage")
+                test_driver = webdriver.Chrome(service=chrome_service, options=options)
+                success = False
+                try:
+                    if service_clean == "google":
+                        test_driver.get("https://search.google.com/search-console")
+                        for c in cookies:
+                            try:
+                                sc = {'name': c.get('name'), 'value': c.get('value'), 'path': c.get('path', '/')}
+                                if c.get('domain'): sc['domain'] = c['domain']
+                                test_driver.add_cookie(sc)
+                            except: pass
+                        test_driver.refresh()
+                        time.sleep(2)
+                        url = test_driver.current_url.lower()
+                        success = "accounts.google.com" not in url and "signin" not in url
+                    else:
+                        test_driver.get("https://www.bing.com")
+                        for c in cookies:
+                            try:
+                                sc = {'name': c.get('name'), 'value': c.get('value'), 'path': c.get('path', '/')}
+                                if c.get('domain'): sc['domain'] = c['domain']
+                                test_driver.add_cookie(sc)
+                            except: pass
+                        test_driver.get("https://www.bing.com/webmasters/sitemaps")
+                        time.sleep(2)
+                        url = test_driver.current_url.lower()
+                        success = "login.live.com" not in url and "webmasters/about" not in url and "signin" not in url
+                finally:
+                    test_driver.quit()
+
+                if success:
+                    root.after(0, lambda: messagebox.showinfo("Test Result", f"✅ Authentication Successful!\nCookies are valid for {service.title()}."))
+                    root.after(0, lambda: status_lbl.config(text="✅ Cookies Verified Active", fg="#4CAF50"))
+                else:
+                    root.after(0, lambda: messagebox.showwarning("Test Result", f"❌ Authentication Failed: Redirected to login page.\nPlease re-export fresh cookies."))
+                    root.after(0, lambda: status_lbl.config(text="❌ Expired / Invalid Cookies", fg="#E50914"))
+            except Exception as test_err:
+                root.after(0, lambda: messagebox.showerror("Test Error", f"Could not test cookies:\n{test_err}"))
+                root.after(0, lambda: status_lbl.config(text="Test error", fg="#E50914"))
+
+        threading.Thread(target=_test_worker, daemon=True).start()
+
+    btn_box = tk.Frame(top)
+    btn_box.pack(fill="x", padx=10, pady=(4, 10))
+
+    btn_save = tk.Button(btn_box, text="💾 Save Cookies", command=save_cookies, bg="#4CAF50", fg="white", font=("Segoe UI", 9, "bold"), padx=10, pady=4, cursor="hand2")
+    btn_save.pack(side="left", padx=(0, 5))
+
+    btn_test = tk.Button(btn_box, text="🔍 Test / Verify", command=test_cookies, bg="#1E88E5", fg="white", font=("Segoe UI", 9), padx=10, pady=4, cursor="hand2")
+    btn_test.pack(side="left", padx=5)
+
+    btn_del = tk.Button(btn_box, text="🗑️ Delete", command=clear_cookies_action, bg="#777", fg="white", font=("Segoe UI", 9), padx=8, pady=4, cursor="hand2")
+    btn_del.pack(side="right")
 
 
 def open_login_browser(country, service):
-    """Open a VISIBLE browser for manual login. Blocks until user clicks OK."""
-    if service == "google":
-        start_url = "https://accounts.google.com/"
-        verify_text = "Then verify access at: https://search.google.com/search-console"
-    else:
-        start_url = "https://www.bing.com/webmasters/"
-        verify_text = "Then verify access to the Bing Webmaster Tools dashboard"
-
-    try:
-        creds = read_credentials(country) if service == "google" else None
-        
-        if not creds:
-            messagebox.showinfo(
-                "Login Instructions",
-                f"A browser window is about to open.\n\n"
-                f"1. Please complete the login process in the browser.\n"
-                f"2. {verify_text}\n"
-                f"3. After you finish logging in, return to this app and click 'Yes' on the next popup to confirm.",
-            )
-
-        print("🔄 Setting up browser for GSC Validation...")
-            
-        driver, e = setup_driver_with_session(country, service, headless=False, output_folder=None)
-        if not driver:
-            print(f"❌ Failed to launch Chrome for {country}. Check terminal for errors.")
-            messagebox.showerror("Login Error", f"Failed to launch Chrome for {country}: {e}")
-            return
-
-        driver.get(start_url)
-
-        # Let the page load its initial domain cookies before injecting
-        time.sleep(2)
-
-        # TRY COOKIES FIRST
-        if load_cookies_to_driver(driver, country, service):
-            print(f"🍪 Successfully injected cookies for {service.title()} ({country})!")
-            driver.refresh()
-            time.sleep(3) # Give it time to finish loading the logged-in state
-            
-        elif creds and service == "google":
-            print(f"🔑 Automating login for {country}...")
-            auto_login_google(driver, creds)
-            if creds.get("2FA Secret", "").strip():
-                time.sleep(5) # Give it time to finish login
-            else:
-                # Need manual 2FA or Captcha
-                messagebox.showinfo("Manual Action Required", "Please complete the 2FA challenge or Captcha in the browser, then click OK.")
-        else:
-            # Give the user a 30-second head start to interact with the browser before showing the confirmation popup
-            time.sleep(30)
-
-        success = messagebox.askyesno(
-            f"{service.title()} Login \u2014 {country}",
-            f"Did you successfully complete the login?",
-        )
-
-        safe_quit_driver(driver)
-
-        if not success:
-            clear_session(country, service)
-            messagebox.showwarning(
-                "Login Cancelled", f"The {service.title()} login was cancelled."
-            )
-
-    except Exception as e:
-        messagebox.showerror("Login Error", f"Could not open browser: {e}")
+    """Fallback stub: opens the cookie management window."""
+    open_cookie_paste_window(country, service)
 
 
 # ----------------------------
@@ -2425,6 +2573,12 @@ def safe_quit_driver(driver):
     except:
         pass
     try:
+        temp_dir = getattr(driver, "_temp_dir", None)
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+    except:
+        pass
+    try:
         if driver in _active_drivers:
             _active_drivers.remove(driver)
     except:
@@ -3897,7 +4051,7 @@ ttk.Checkbutton(
 
 # 3. Sessions Card
 card_sessions = ttk.LabelFrame(
-    tasks_right_frame, text=" 🔐 Browser Sessions ", padding=10
+    tasks_right_frame, text=" 🔐 Browser Cookies & Sessions ", padding=10
 )
 card_sessions.pack(fill="both", expand=True, pady=0)
 
@@ -3912,6 +4066,7 @@ tk.Label(
     fg=TEXT_COLOR,
     font=("Segoe UI", 10, "bold"),
 ).pack(side="left")
+
 google_session_status = tk.Label(
     google_session_frame,
     text="Select country",
@@ -3921,69 +4076,12 @@ google_session_status = tk.Label(
     anchor="w",
 )
 
-
-def clear_google_session():
-    selected = get_selected_countries()
-    if len(selected) != 1:
-        messagebox.showinfo(
-            "Info", "Please select exactly one country for this operation."
-        )
-        return
-    c = selected[0]
-    if clear_session(c, "google"):
-        update_session_status()
-        messagebox.showinfo("Cleared", f"Google session for {c} has been cleared.")
-    else:
-        messagebox.showerror(
-            "Error",
-            "Could not clear the session. A background Chrome process is locking the files.\n\nPlease close any hanging Chrome processes or run 'taskkill /F /IM chrome.exe' in the terminal.",
-        )
-
-
-def login_google_session():
-    selected = get_selected_countries()
-    if len(selected) != 1:
-        messagebox.showinfo(
-            "Info", "Please select exactly one country for this operation."
-        )
-        return
-    c = selected[0]
-    open_login_browser(c, "google")
-    update_session_status()
-
-
-btn_clear_google = tk.Button(
-    google_session_frame,
-    text="Clear",
-    command=clear_google_session,
-    bg="#555",
-    fg="white",
-    font=("Segoe UI", 8),
-    relief="flat",
-    padx=4,
-    cursor="hand2",
-)
-btn_clear_google.pack(side="right", padx=(5, 0))
-
 def paste_cookies_google_session():
     selected = get_selected_countries()
     if len(selected) != 1:
-        messagebox.showinfo("Info", "Please select exactly one country for this operation.")
+        messagebox.showinfo("Info", "Please select exactly one country to manage cookies.")
         return
     open_cookie_paste_window(selected[0], "google")
-
-btn_login_google = tk.Button(
-    google_session_frame,
-    text="Login",
-    command=login_google_session,
-    bg="#333",
-    fg="white",
-    font=("Segoe UI", 8),
-    relief="flat",
-    padx=4,
-    cursor="hand2",
-)
-btn_login_google.pack(side="right")
 
 btn_cookies_google = tk.Button(
     google_session_frame,
@@ -3991,13 +4089,13 @@ btn_cookies_google = tk.Button(
     command=paste_cookies_google_session,
     bg="#1E88E5",
     fg="white",
-    font=("Segoe UI", 8),
+    font=("Segoe UI", 8, "bold"),
     relief="flat",
-    padx=4,
+    padx=8,
+    pady=2,
     cursor="hand2",
 )
-btn_cookies_google.pack(side="right", padx=(0, 5))
-
+btn_cookies_google.pack(side="right", padx=(5, 0))
 google_session_status.pack(side="left", fill="x", expand=True, padx=(10, 5), anchor="w")
 
 # Bing Session Row
@@ -4006,11 +4104,12 @@ bing_session_frame.pack(fill="x", pady=(0, 2))
 
 tk.Label(
     bing_session_frame,
-    text="Bing:",
+    text="Bing:  ",
     bg=CARD_BG,
     fg=TEXT_COLOR,
     font=("Segoe UI", 10, "bold"),
 ).pack(side="left")
+
 bing_session_status = tk.Label(
     bing_session_frame,
     text="Select country",
@@ -4020,69 +4119,12 @@ bing_session_status = tk.Label(
     anchor="w",
 )
 
-
-def clear_bing_session():
-    selected = get_selected_countries()
-    if len(selected) != 1:
-        messagebox.showinfo(
-            "Info", "Please select exactly one country for this operation."
-        )
-        return
-    c = selected[0]
-    if clear_session(c, "bing"):
-        update_session_status()
-        messagebox.showinfo("Cleared", f"Bing session for {c} has been cleared.")
-    else:
-        messagebox.showerror(
-            "Error",
-            "Could not clear the session. A background Chrome process is locking the files.\n\nPlease close any hanging Chrome processes or run 'taskkill /F /IM chrome.exe' in the terminal.",
-        )
-
-
-def login_bing_session():
-    selected = get_selected_countries()
-    if len(selected) != 1:
-        messagebox.showinfo(
-            "Info", "Please select exactly one country for this operation."
-        )
-        return
-    c = selected[0]
-    open_login_browser(c, "bing")
-    update_session_status()
-
-
 def paste_cookies_bing_session():
     selected = get_selected_countries()
     if len(selected) != 1:
-        messagebox.showinfo("Info", "Please select exactly one country for this operation.")
+        messagebox.showinfo("Info", "Please select exactly one country to manage cookies.")
         return
     open_cookie_paste_window(selected[0], "bing")
-
-btn_clear_bing = tk.Button(
-    bing_session_frame,
-    text="Clear",
-    command=clear_bing_session,
-    bg="#555",
-    fg="white",
-    font=("Segoe UI", 8),
-    relief="flat",
-    padx=4,
-    cursor="hand2",
-)
-btn_clear_bing.pack(side="right", padx=(5, 0))
-
-btn_login_bing = tk.Button(
-    bing_session_frame,
-    text="Login",
-    command=login_bing_session,
-    bg="#333",
-    fg="white",
-    font=("Segoe UI", 8),
-    relief="flat",
-    padx=4,
-    cursor="hand2",
-)
-btn_login_bing.pack(side="right")
 
 btn_cookies_bing = tk.Button(
     bing_session_frame,
@@ -4090,16 +4132,14 @@ btn_cookies_bing = tk.Button(
     command=paste_cookies_bing_session,
     bg="#1E88E5",
     fg="white",
-    font=("Segoe UI", 8),
+    font=("Segoe UI", 8, "bold"),
     relief="flat",
-    padx=4,
+    padx=8,
+    pady=2,
     cursor="hand2",
 )
-btn_cookies_bing.pack(side="right", padx=(0, 5))
-
+btn_cookies_bing.pack(side="right", padx=(5, 0))
 bing_session_status.pack(side="left", fill="x", expand=True, padx=(10, 5), anchor="w")
-
-
 
 # Batch Status Area
 batch_status_frame = tk.Frame(card_sessions, bg=CARD_BG)
@@ -4118,12 +4158,9 @@ batch_status_text = tk.Text(
 batch_status_scrollbar.config(command=batch_status_text.yview)
 batch_status_text.pack(side="left", fill="both", expand=True)
 batch_status_scrollbar.pack(side="right", fill="y")
-# Don't pack it yet, pack it in update_session_status
 
-
-
-def quick_login(c, platform):
-    open_login_browser(c, platform)
+def quick_cookie_paste(c, platform):
+    open_cookie_paste_window(c, platform)
     update_session_status()
 
 def update_session_status():
@@ -4134,16 +4171,15 @@ def update_session_status():
         # Show batch status frame
         batch_status_frame.pack(fill="both", expand=True, pady=(10, 0))
         
-        # Build status text
-        status_lines = []
-        
         google_needs = []
         bing_needs = []
         
         for c in selected:
-            if not session_exists(c, "google"):
+            st_g, _, _ = get_cookie_status(c, "google")
+            if st_g != "active":
                 google_needs.append(c)
-            if not session_exists(c, "bing"):
+            st_b, _, _ = get_cookie_status(c, "bing")
+            if st_b != "active":
                 bing_needs.append(c)
                 
         batch_status_text.config(state=tk.NORMAL)
@@ -4153,34 +4189,34 @@ def update_session_status():
         for widget in batch_status_text.winfo_children():
             widget.destroy()
 
-        batch_status_text.insert(tk.END, "--- Google ---\n")
+        batch_status_text.insert(tk.END, "--- Google Cookies ---\n")
         if not google_needs:
-            batch_status_text.insert(tk.END, "✅ All logged in\n")
+            batch_status_text.insert(tk.END, "✅ All countries ready\n")
         else:
-            batch_status_text.insert(tk.END, f"❌ Missing ({len(google_needs)}):\n")
+            batch_status_text.insert(tk.END, f"❌ Missing / Expired ({len(google_needs)}):\n")
             for c in google_needs:
                 batch_status_text.insert(tk.END, f"  - {c}  ")
                 btn = tk.Button(
                     batch_status_text, 
-                    text="Login", 
-                    command=lambda country=c: quick_login(country, "google"), 
-                    bg="#333", fg="white", font=("Segoe UI", 8), cursor="hand2", padx=5, pady=0
+                    text="Cookies", 
+                    command=lambda country=c: quick_cookie_paste(country, "google"), 
+                    bg="#1E88E5", fg="white", font=("Segoe UI", 8), cursor="hand2", padx=5, pady=0
                 )
                 batch_status_text.window_create(tk.END, window=btn)
                 batch_status_text.insert(tk.END, "\n")
                 
-        batch_status_text.insert(tk.END, "\n--- Bing ---\n")
+        batch_status_text.insert(tk.END, "\n--- Bing Cookies ---\n")
         if not bing_needs:
-            batch_status_text.insert(tk.END, "✅ All logged in\n")
+            batch_status_text.insert(tk.END, "✅ All countries ready\n")
         else:
-            batch_status_text.insert(tk.END, f"❌ Missing ({len(bing_needs)}):\n")
+            batch_status_text.insert(tk.END, f"❌ Missing / Expired ({len(bing_needs)}):\n")
             for c in bing_needs:
                 batch_status_text.insert(tk.END, f"  - {c}  ")
                 btn = tk.Button(
                     batch_status_text, 
-                    text="Login", 
-                    command=lambda country=c: quick_login(country, "bing"), 
-                    bg="#333", fg="white", font=("Segoe UI", 8), cursor="hand2", padx=5, pady=0
+                    text="Cookies", 
+                    command=lambda country=c: quick_cookie_paste(country, "bing"), 
+                    bg="#1E88E5", fg="white", font=("Segoe UI", 8), cursor="hand2", padx=5, pady=0
                 )
                 batch_status_text.window_create(tk.END, window=btn)
                 batch_status_text.insert(tk.END, "\n")
@@ -4192,14 +4228,11 @@ def update_session_status():
     elif len(selected) == 1:
         batch_status_frame.pack_forget()
         c = selected[0]
-        if session_exists(c, "google"):
-            google_session_status.config(text="\u2705 Logged in", fg="#4CAF50")
-        else:
-            google_session_status.config(text="\ud83d\udd34 Not logged in", fg="#E50914")
-        if session_exists(c, "bing"):
-            bing_session_status.config(text="\u2705 Logged in", fg="#4CAF50")
-        else:
-            bing_session_status.config(text="\ud83d\udd34 Not logged in", fg="#E50914")
+        st_g, txt_g, col_g = get_cookie_status(c, "google")
+        google_session_status.config(text=txt_g, fg=col_g)
+        
+        st_b, txt_b, col_b = get_cookie_status(c, "bing")
+        bing_session_status.config(text=txt_b, fg=col_b)
     else:
         batch_status_frame.pack_forget()
         google_session_status.config(text="Select country", fg="#b3b3b3")
